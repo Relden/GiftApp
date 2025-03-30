@@ -83,6 +83,10 @@
     </div>
 
     <script>
+        const SPREADSHEET_ID = "10fEmu4X9GzyBSFIAkS_alZyUCncU7Ltf6CvpQendVN8"; // Встав ID своєї таблиці
+        const API_KEY = "AIzaSyAZbTMbFoxlqy8tKp_FonkDV_fSGA81uxw"; // Встав API-ключ із Google Cloud Console
+        const OPENAI_API_KEY = "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"; // Встав API-ключ OpenAI
+
         async function submitForm() {
             const who = document.getElementById("who").value;
             const summ = document.getElementById("summ").value;
@@ -93,38 +97,88 @@
                 return;
             }
 
-            const data = { who, summ, about };
-            const url = "https://script.google.com/macros/s/AKfycbx0RXPUXx2ZppEY2Xy4xmQ3713DV_btamRSPmf9WxZpSUuJU4m2JTMHcnTUEsBQggmX/exec"; // Встав URL із Google Apps Script
-
             document.getElementById("result").innerText = "Обробка...";
 
-            try {
-                const response = await fetch(url, {
-                    method: "POST",
-                    body: JSON.stringify(data),
-                    headers: { "Content-Type": "application/json" }
-                });
-                const result = await response.json();
+            // 1. Запиши дані в Google Sheets
+            const timestamp = new Date().toISOString();
+            const values = [[timestamp, who, summ, about, "Обробка..."]];
+            const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Sheet1!A:E:append?valueInputOption=RAW&key=${API_KEY}`;
 
-                if (result.status === "success") {
-                    document.getElementById("result").innerText = result.result;
-                } else {
-                    document.getElementById("result").innerText = "Помилка при обробці.";
+            try {
+                const appendResponse = await fetch(appendUrl, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        values: values
+                    })
+                });
+
+                if (!appendResponse.ok) {
+                    throw new Error("Помилка при записі в Google Sheets: " + appendResponse.statusText);
                 }
+
+                // 2. Виклич OpenAI
+                const prompt = `You are a gift selection assistant. The user provides: who the gift is for, budget in UAH as a number, and a few words about the person’s interests. Suggest 3-5 gift ideas within the budget, related to the interests. Each idea should be one sentence with the item name, price in UAH, and a short explanation. Format with numbered lines. Input data: [Who] — ${who}, [Budget] — ${summ}, [Interests] — ${about}.`;
+                const openaiResponse = await fetch("https://api.openai.com/v1/completions", {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        model: "text-davinci-003",
+                        prompt: prompt,
+                        max_tokens: 200,
+                        temperature: 0.7
+                    })
+                });
+
+                if (!openaiResponse.ok) {
+                    throw new Error("Помилка при виклику OpenAI: " + openaiResponse.statusText);
+                }
+
+                const openaiData = await openaiResponse.json();
+                const result = openaiData.choices[0].text.trim();
+
+                // 3. Онови останній рядок у Google Sheets із результатом
+                const getRowsUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Sheet1!A:E?key=${API_KEY}`;
+                const getRowsResponse = await fetch(getRowsUrl);
+                const rowsData = await getRowsResponse.json();
+                const lastRowIndex = rowsData.values.length; // Останній рядок (індекс + 1)
+
+                const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Sheet1!E${lastRowIndex}?valueInputOption=RAW&key=${API_KEY}`;
+                const updateResponse = await fetch(updateUrl, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        values: [[result]]
+                    })
+                });
+
+                if (!updateResponse.ok) {
+                    throw new Error("Помилка при оновленні Google Sheets: " + updateResponse.statusText);
+                }
+
+                // 4. Покажи результат
+                document.getElementById("result").innerText = result;
             } catch (error) {
                 document.getElementById("result").innerText = "Помилка: " + error.message;
             }
         }
 
-        // Оновлюй результат кожні 10 секунд
         async function fetchResult() {
-            const url = "твій_URL_Apps_Script";
+            const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Sheet1!A:E?key=${API_KEY}`;
             try {
                 const response = await fetch(url);
                 const data = await response.json();
-                document.getElementById("result").innerText = data.result || "Немає результату";
+                const lastRow = data.values[data.values.length - 1];
+                document.getElementById("result").innerText = lastRow[4] || "Немає результату";
             } catch (error) {
-                document.getElementById("result").innerText = "Помилка при оновленні: " + error.message;
+                document.getElementById("result").innerText = "Помилка: " + error.message;
             }
         }
 
@@ -136,13 +190,7 @@
     <script>
         if ("serviceWorker" in navigator) {
             window.addEventListener("load", () => {
-                navigator.serviceWorker.register("sw.js")
-                    .then(registration => {
-                        console.log("Service Worker зареєстровано:", registration);
-                    })
-                    .catch(error => {
-                        console.error("Помилка при реєстрації Service Worker:", error);
-                    });
+                navigator.serviceWorker.register("sw.js");
             });
         }
     </script>
